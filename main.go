@@ -16,17 +16,47 @@ import (
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
+// command line arguments
 var (
 	imageFilename = []*string{
 		kingpin.Arg("field", "field (game screen) image").Required().ExistingFile(),
 		kingpin.Arg("object", "object to find").Required().ExistingFile(),
 	}
-	threshholdLow  = kingpin.Flag("thresh-low", "low hit threshhold (between 0 and 1)").Default("0").Float64()
-	threshholdHigh = kingpin.Flag("thresh-high", "high hit threshhold (between 0 and 1)").Default("1").Float64()
-	hitDist        = kingpin.Flag("hit-dist", "minimum pixel distance between hits. default is object size.").Int()
-	noHitDist      = kingpin.Flag("no-hit-dist", "output all hits, regardless of distance to each other.").Default("false").Bool()
+	threshholdLow  = kingpin.Flag("low", "output hits below this thresshold.").Default("0").Float64()
+	threshholdHigh = kingpin.Flag("high", "output hits above this threshhold.").Default("1").Float64()
+	hitDist        = kingpin.Flag("dist", "minimum pixel distance between hits. if negative, use object image size.").Default("-1").Int()
 	verbose        = kingpin.Flag("verbose", "verbose output").Short('v').Bool()
+	pngOutput      = kingpin.Flag("png", "enable png output").Default("false").Bool()
 )
+
+// imageFilename slice indices
+const (
+	IMG_FIELD = iota
+	IMG_OBJECT
+)
+
+type Point struct {
+	X, Y int
+}
+
+// Distance (L-inf norm) between Points p and q
+func (p Point) Dist(q Point) int {
+	dx := p.X - q.X
+	dy := p.Y - q.Y
+	if dx < 0 {
+		dx = -dx
+	}
+	if dy < 0 {
+		dy = -dy
+	}
+	if dx > dy {
+		return dx
+	}
+	return dy
+}
+
+// matches to be output
+var hits []Point
 
 func verboseOut(format string, a ...interface{}) {
 	if *verbose {
@@ -47,27 +77,6 @@ func toGrayscale(i image.Image) image.Image {
 	return gray
 }
 
-type Point struct {
-	X, Y int
-}
-
-var hits []Point
-
-func (p Point) Dist(q Point) int {
-	dx := p.X - q.X
-	dy := p.Y - q.Y
-	if dx < 0 {
-		dx = -dx
-	}
-	if dy < 0 {
-		dy = -dy
-	}
-	if dx > dy {
-		return dx
-	}
-	return dy
-}
-
 // add hit p to hits list
 func addHit(p Point, pxl float64) {
 	if hitDist != nil {
@@ -75,11 +84,13 @@ func addHit(p Point, pxl float64) {
 		for i := range hits {
 			if hits[i].Dist(p) < *hitDist {
 				// too close to previous hits[i], drop hit p
+				// TODO if p is a better hit, replace existing hit?
 				return
 			}
 		}
 	}
 	hits = append(hits, p)
+	// TODO output only best hits at end of run
 	fmt.Printf("%d,%d,%f\n", p.X, p.Y, pxl)
 }
 
@@ -119,6 +130,7 @@ func grayConvolve(f, g *image.Gray) image.Image {
 		//fmt.Println(result)
 		wg.Done()
 	}
+	verboseOut("\n")
 	for u := out.Rect.Min.X; u < out.Rect.Max.X; u++ {
 		wg.Add(out.Rect.Size().Y)
 		for v := out.Rect.Min.Y; v < out.Rect.Max.Y; v++ {
@@ -127,6 +139,7 @@ func grayConvolve(f, g *image.Gray) image.Image {
 		wg.Wait()
 		verboseOut("\r%.2f%% complete", float64(u)/float64(out.Rect.Size().X)*100)
 	}
+	verboseOut("\n")
 	// compute min and max of image pixels
 	min := outFloat[0]
 	max := outFloat[0]
@@ -164,6 +177,14 @@ func main() {
 	var wg sync.WaitGroup
 	kingpin.Version("test")
 	kingpin.Parse()
+	if *threshholdLow == 0 && *threshholdHigh == 1 {
+		fmt.Fprint(os.Stderr, "Warning: command line sets --low=0 and --high=1, so no hits will be output.\n")
+		if *pngOutput == false {
+			fmt.Fprint(os.Stderr, "Error: PNG output is also disabled. Nothing to do!\n")
+			fmt.Fprint(os.Stderr, "Threshhold values --low and/or --high must be set, or PNG output enabled with --png\n")
+			return
+		}
+	}
 	verboseOut("starting\n")
 	defer verboseOut("exiting\n")
 	wg.Add(len(imageFilename))
@@ -191,6 +212,18 @@ func main() {
 	wg.Wait()
 	verboseOut("loading images took %v\n", time.Since(loadImageStartTime))
 	// image1 and image2 are loaded in img
+	//
+	if *hitDist < 0 {
+		// no minimum hit distance is set, use the larger of IMG_OBJECT's width
+		// and height
+		p := img[IMG_OBJECT].Bounds().Size()
+		s := p.X
+		if p.Y > s {
+			s = p.Y
+		}
+		*hitDist = s
+	}
+	verboseOut("minimum hit distance %d", *hitDist)
 	switch u := img[0].(type) {
 	case *image.Gray:
 		out := grayConvolve(u, img[1].(*image.Gray))
@@ -201,7 +234,7 @@ func main() {
 		png.Encode(outFile, out)
 		outFile.Close()
 	default:
-		fmt.Fprintf(os.Stderr, "unexpected image type %T\n", u)
+		fmt.Fprintf(os.Stderr, "unexpected image format %T\n", u)
 		os.Exit(1)
 		return
 	}
