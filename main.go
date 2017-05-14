@@ -28,6 +28,7 @@ var (
 	hitDist        = eoc.Flag("dist", "minimum pixel distance between hits. if negative, use object image size.").Default("-1").Int()
 	verbose        = eoc.Flag("verbose", "verbose output").Short('v').Bool()
 	pngOutput      = eoc.Flag("png", "enable PNG output").Default("false").Bool()
+	csvOutput      = eoc.Flag("csv", "enable CSV output").Default("true").Bool()
 	center         = eoc.Flag("center", "output center of object").Short('c').Default("true").Bool()
 )
 
@@ -37,12 +38,13 @@ const (
 	IMG_OBJECT
 )
 
-type Point struct {
+type Hit struct {
 	X, Y int
+	P    float64
 }
 
-// Distance (L-inf norm) between Points p and q
-func (p Point) Dist(q Point) int {
+// Distance (L-inf norm) between Hits p and q
+func (p Hit) Dist(q Hit) int {
 	dx := p.X - q.X
 	dy := p.Y - q.Y
 	if dx < 0 {
@@ -58,7 +60,7 @@ func (p Point) Dist(q Point) int {
 }
 
 // matches to be output
-var hits []Point
+var hits []Hit
 
 func verboseOut(format string, a ...interface{}) {
 	if *verbose {
@@ -80,7 +82,7 @@ func toGrayscale(i image.Image) image.Image {
 }
 
 // add hit p to hits list
-func addHit(p Point, pxl float64) {
+func addHit(p Hit) {
 	if hitDist != nil {
 		// is this hit p too close to some other hit?
 		for i := range hits {
@@ -92,8 +94,6 @@ func addHit(p Point, pxl float64) {
 		}
 	}
 	hits = append(hits, p)
-	// TODO output only best hits at end of run
-	fmt.Printf("%d,%d,%f\n", p.X, p.Y, pxl)
 }
 
 func grayConvolve(field, object *image.Gray) image.Image {
@@ -160,18 +160,18 @@ func grayConvolve(field, object *image.Gray) image.Image {
 	pxlRange := max - min
 	for u := out.Rect.Min.X; u < out.Rect.Max.X; u++ {
 		for v := out.Rect.Min.Y; v < out.Rect.Max.Y; v++ {
-			p := Point{u, v}
+			i := out.PixOffset(u, v)
+			pxl := ((outFloat[i] - min) / pxlRange)
+			p := Hit{u, v, pxl}
 			if *center == true {
 				p.X += object.Bounds().Size().X / 2
 				p.Y += object.Bounds().Size().Y / 2
 			}
-			i := out.PixOffset(u, v)
-			pxl := ((outFloat[i] - min) / pxlRange)
 			if pxl < *threshholdLow {
-				addHit(Point{u, v}, pxl)
+				addHit(p)
 			}
 			if pxl > *threshholdHigh {
-				addHit(Point{u, v}, pxl)
+				addHit(p)
 			}
 			out.Pix[i] = uint8(pxl * 255)
 		}
@@ -189,10 +189,22 @@ func main() {
 		if *pngOutput == false {
 			fmt.Fprint(os.Stderr, "Error: PNG output is also disabled. Nothing to do!\n")
 			fmt.Fprint(os.Stderr, "Threshhold values --low and/or --high must be set, or PNG output enabled with --png\n")
+			os.Exit(1)
 			return
 		}
 	}
 	verboseOut("starting\n")
+	var csv *os.File
+	if *csvOutput {
+		var err error
+		csv, err = os.OpenFile("out.csv", os.O_CREATE|os.O_WRONLY, 0666)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "failed to open out.csv: %v\n", err)
+			os.Exit(1)
+			return
+		}
+		defer csv.Close()
+	}
 	defer verboseOut("exiting\n")
 	wg.Add(len(imageFilename))
 	loadImageStartTime := time.Now()
@@ -246,5 +258,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unexpected image format %T\n", u)
 		os.Exit(1)
 		return
+	}
+	for i := range hits {
+		s := fmt.Sprintf("%d,%d,%f\n", hits[i].X, hits[i].Y, hits[i].P)
+		if *csvOutput {
+			csv.WriteString(fmt.Sprintf("%d,%d,%f\n", hits[i].X, hits[i].Y, hits[i].P))
+		}
+		fmt.Println("hit:", s)
 	}
 }
