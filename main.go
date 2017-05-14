@@ -24,6 +24,7 @@ var (
 	threshholdLow  = kingpin.Flag("thresh-low", "low hit threshhold (between 0 and 1)").Default("0").Float64()
 	threshholdHigh = kingpin.Flag("thresh-high", "high hit threshhold (between 0 and 1)").Default("1").Float64()
 	hitDist        = kingpin.Flag("hit-dist", "minimum pixel distance between hits. default is object size.").Int()
+	noHitDist      = kingpin.Flag("no-hit-dist", "output all hits, regardless of distance to each other.").Default("false").Bool()
 	verbose        = kingpin.Flag("verbose", "verbose output").Short('v').Bool()
 )
 
@@ -126,7 +127,7 @@ func grayConvolve(f, g *image.Gray) image.Image {
 		wg.Wait()
 		verboseOut("\r%.2f%% complete", float64(u)/float64(out.Rect.Size().X)*100)
 	}
-	// compute min and max of image
+	// compute min and max of image pixels
 	min := outFloat[0]
 	max := outFloat[0]
 	for u := out.Rect.Min.X; u < out.Rect.Max.X; u++ {
