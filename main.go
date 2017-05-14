@@ -73,9 +73,10 @@ func toGrayscale(i image.Image) image.Image {
 	gray := image.NewGray(r)
 	for x := r.Min.X; x < r.Max.X; x++ {
 		for y := r.Min.Y; y < r.Max.Y; y++ {
-			_, g, _, a := i.At(x, y).RGBA()
-			c := color.RGBA{0, uint8(g >> 8), 0, uint8(a >> 8)}
-			gray.Set(x, y, color.GrayModel.Convert(c))
+			//_, g, _, a := i.At(x, y).RGBA()
+			//c := color.RGBA{0, uint8(g >> 8), 0, uint8(a >> 8)}
+			//gray.Set(x, y, color.GrayModel.Convert(c))
+			gray.Set(x, y, color.GrayModel.Convert(i.At(x, y)))
 		}
 	}
 	return gray
@@ -87,8 +88,11 @@ func addHit(p Hit) {
 		// is this hit p too close to some other hit?
 		for i := range hits {
 			if hits[i].Dist(p) < *hitDist {
-				// too close to previous hits[i], drop hit p
-				// TODO if p is a better hit, replace existing hit?
+				// if p has a lower score, replace hits[i] with p. otherwise
+				// discard hit p
+				if p.P < hits[i].P {
+					hits[i] = p
+				}
 				return
 			}
 		}
@@ -156,6 +160,7 @@ func grayConvolve(field, object *image.Gray) image.Image {
 			}
 		}
 	}
+	min = 0
 	// produce output image
 	pxlRange := max - min
 	for u := out.Rect.Min.X; u < out.Rect.Max.X; u++ {
@@ -259,10 +264,15 @@ func main() {
 		os.Exit(1)
 		return
 	}
+	if len(hits) == 0 {
+		fmt.Fprintf(os.Stderr, "Warning: no hits found\n")
+		os.Exit(2)
+		return
+	}
 	for i := range hits {
-		s := fmt.Sprintf("%d,%d,%f\n", hits[i].X, hits[i].Y, hits[i].P)
+		s := fmt.Sprintf("%d,%d,%f", hits[i].X, hits[i].Y, hits[i].P)
 		if *csvOutput {
-			csv.WriteString(fmt.Sprintf("%d,%d,%f\n", hits[i].X, hits[i].Y, hits[i].P))
+			csv.WriteString(fmt.Sprintln(s))
 		}
 		fmt.Println("hit:", s)
 	}
