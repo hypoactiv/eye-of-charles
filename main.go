@@ -18,15 +18,17 @@ import (
 
 // command line arguments
 var (
+	eoc           = kingpin.New("eye-of-charles", "A simple computer vision tool for finding objests amongst fields. Outputs a list of hits (X, Y, and pixel values) that are above or below the provided threshholds.")
 	imageFilename = []*string{
-		kingpin.Arg("field", "field (game screen) image").Required().ExistingFile(),
-		kingpin.Arg("object", "object to find").Required().ExistingFile(),
+		eoc.Arg("field", "field (game screen) image").Required().ExistingFile(),
+		eoc.Arg("object", "object to find").Required().ExistingFile(),
 	}
-	threshholdLow  = kingpin.Flag("low", "output hits below this thresshold.").Default("0").Float64()
-	threshholdHigh = kingpin.Flag("high", "output hits above this threshhold.").Default("1").Float64()
-	hitDist        = kingpin.Flag("dist", "minimum pixel distance between hits. if negative, use object image size.").Default("-1").Int()
-	verbose        = kingpin.Flag("verbose", "verbose output").Short('v').Bool()
-	pngOutput      = kingpin.Flag("png", "enable png output").Default("false").Bool()
+	threshholdLow  = eoc.Flag("low", "output hits below this thresshold.").Default("0").Float64()
+	threshholdHigh = eoc.Flag("high", "output hits above this threshhold.").Default("1").Float64()
+	hitDist        = eoc.Flag("dist", "minimum pixel distance between hits. if negative, use object image size.").Default("-1").Int()
+	verbose        = eoc.Flag("verbose", "verbose output").Short('v').Bool()
+	pngOutput      = eoc.Flag("png", "enable PNG output").Default("false").Bool()
+	center         = eoc.Flag("center", "output center of object").Short('c').Default("true").Bool()
 )
 
 // imageFilename slice indices
@@ -94,8 +96,8 @@ func addHit(p Point, pxl float64) {
 	fmt.Printf("%d,%d,%f\n", p.X, p.Y, pxl)
 }
 
-func grayConvolve(f, g *image.Gray) image.Image {
-	out := image.NewGray(f.Rect)
+func grayConvolve(field, object *image.Gray) image.Image {
+	out := image.NewGray(field.Rect)
 	float := func(img *image.Gray, x, y int) float64 {
 		return float64(img.GrayAt(x, y).Y) / 255.0
 	}
@@ -120,9 +122,9 @@ func grayConvolve(f, g *image.Gray) image.Image {
 		result := 0.0
 		i := out.PixOffset(u, v)
 		out.Pix[i] = 0
-		for x := g.Rect.Min.X; x < g.Rect.Max.X; x++ {
-			for y := g.Rect.Min.Y; y < g.Rect.Max.Y; y++ {
-				result += math.Abs(float(f, u+x, v+y) - float(g, x, y)) //(float(f, u+x, v+y) - fMean) * (float(g, x, y) - gMean)
+		for x := object.Rect.Min.X; x < object.Rect.Max.X; x++ {
+			for y := object.Rect.Min.Y; y < object.Rect.Max.Y; y++ {
+				result += math.Abs(float(field, u+x, v+y) - float(object, x, y)) //(float(f, u+x, v+y) - fMean) * (float(g, x, y) - gMean)
 			}
 		}
 		outFloat[i] = result
@@ -158,6 +160,11 @@ func grayConvolve(f, g *image.Gray) image.Image {
 	pxlRange := max - min
 	for u := out.Rect.Min.X; u < out.Rect.Max.X; u++ {
 		for v := out.Rect.Min.Y; v < out.Rect.Max.Y; v++ {
+			p := Point{u, v}
+			if *center == true {
+				p.X += object.Bounds().Size().X / 2
+				p.Y += object.Bounds().Size().Y / 2
+			}
 			i := out.PixOffset(u, v)
 			pxl := ((outFloat[i] - min) / pxlRange)
 			if pxl < *threshholdLow {
@@ -176,7 +183,7 @@ func main() {
 	var img [2]image.Image
 	var wg sync.WaitGroup
 	kingpin.Version("test")
-	kingpin.Parse()
+	kingpin.MustParse(eoc.Parse(os.Args[1:]))
 	if *threshholdLow == 0 && *threshholdHigh == 1 {
 		fmt.Fprint(os.Stderr, "Warning: command line sets --low=0 and --high=1, so no hits will be output.\n")
 		if *pngOutput == false {
@@ -227,12 +234,14 @@ func main() {
 	switch u := img[0].(type) {
 	case *image.Gray:
 		out := grayConvolve(u, img[1].(*image.Gray))
-		outFile, err := os.OpenFile("out.png", os.O_CREATE|os.O_WRONLY, 0644)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "unable to open output file: %s\n", err.Error())
+		if *pngOutput {
+			outFile, err := os.OpenFile("out.png", os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "unable to open output file: %s\n", err.Error())
+			}
+			png.Encode(outFile, out)
+			outFile.Close()
 		}
-		png.Encode(outFile, out)
-		outFile.Close()
 	default:
 		fmt.Fprintf(os.Stderr, "unexpected image format %T\n", u)
 		os.Exit(1)
