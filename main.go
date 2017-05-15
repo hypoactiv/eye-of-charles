@@ -10,6 +10,7 @@ import (
 	"image/png"
 	"math"
 	"os"
+	"sort"
 	"sync"
 	"time"
 
@@ -252,7 +253,7 @@ func main() {
 	case *image.Gray:
 		out := grayConvolve(u, img[1].(*image.Gray))
 		if *pngOutput {
-			outFile, err := os.OpenFile("out.png", os.O_CREATE|os.O_WRONLY, 0644)
+			outFile, err := os.OpenFile("out.png", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "unable to open output file: %s\n", err.Error())
 			}
@@ -269,6 +270,10 @@ func main() {
 		os.Exit(2)
 		return
 	}
+	// sort hits
+	sort.Slice(hits, func(i, j int) bool {
+		return hits[i].P < hits[j].P
+	})
 	for i := range hits {
 		s := fmt.Sprintf("%d,%d,%f", hits[i].X, hits[i].Y, hits[i].P)
 		if *csvOutput {
