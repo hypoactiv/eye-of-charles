@@ -203,7 +203,7 @@ func main() {
 	var csv *os.File
 	if *csvOutput {
 		var err error
-		csv, err = os.OpenFile("out.csv", os.O_CREATE|os.O_WRONLY, 0666)
+		csv, err = os.OpenFile("out.csv", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to open out.csv: %v\n", err)
 			os.Exit(1)
