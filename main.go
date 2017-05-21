@@ -31,6 +31,7 @@ var (
 	pngOutput      = eoc.Flag("png", "enable PNG output").Default("false").Bool()
 	csvOutput      = eoc.Flag("csv", "enable CSV output").Default("true").Bool()
 	center         = eoc.Flag("center", "output center of object").Short('c').Default("true").Bool()
+	timeoutMillis  = eoc.Flag("timeout", "timeout in milliseconds. 0 to disable timeout.").Short('t').Default("0").Uint()
 )
 
 // imageFilename slice indices
@@ -200,6 +201,14 @@ func main() {
 		}
 	}
 	verboseOut("starting\n")
+	if *timeoutMillis > 0 {
+		// start timeout timer
+		go func() {
+			time.Sleep(time.Duration(*timeoutMillis) * time.Millisecond)
+			fmt.Fprint(os.Stderr, "exiting due to timeout\n")
+			os.Exit(3)
+		}()
+	}
 	var csv *os.File
 	if *csvOutput {
 		var err error
