@@ -1,6 +1,3 @@
-// Compute the convlution (cross-correlation) of two image files and output
-// the result
-
 package main
 
 import (
