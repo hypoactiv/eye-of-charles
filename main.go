@@ -19,7 +19,7 @@ import (
 
 // command line arguments
 var (
-	eoc           = kingpin.New("eye-of-charles", "A simple computer vision tool for finding objests amongst fields. Writes a list of (X,Y) hits with confidence scores to out.csv if they are within the given tolerance.")
+	eoc           = kingpin.New("eye-of-charles", "A simple computer vision tool for finding objects amongst fields. Writes a list of (X,Y) hits with confidence scores to out.csv if they are within the given tolerance.")
 	imageFilename = []*string{
 		eoc.Arg("field", "field (game screen) image").Required().ExistingFile(),
 		eoc.Arg("object", "object image to find in field").Required().ExistingFile(),
