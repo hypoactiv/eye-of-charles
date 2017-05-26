@@ -6,11 +6,13 @@ import (
 	"image/color"
 	"image/draw"
 	"image/png"
-	"math"
+	"io"
 	"os"
-	"sort"
 	"sync"
 	"time"
+
+	"github.com/hypoactiv/imutil"
+	"github.com/hypoactiv/objsearch"
 
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
@@ -27,8 +29,8 @@ var (
 	verbose       = eoc.Flag("verbose", "verbose output").Short('v').Bool()
 	pngOutput     = eoc.Flag("png", "enable PNG debug output").Bool()
 	noCsvOutput   = eoc.Flag("no-csv", "disable CSV output").Bool()
-	hitOffset     = Point(eoc.Flag("offset", "apply offset to all hits. default: hits are centered on object.").PlaceHolder("X,Y").Default("0,0"))
 	timeoutMillis = eoc.Flag("timeout", "timeout in milliseconds. 0 to disable timeout.").Short('t').Default("0").Uint()
+	hitOffset     = Point(eoc.Flag("offset", "apply offset to all hits. default: hits are centered on object.").PlaceHolder("X,Y").Default("0,0"))
 	searchRect    = Rectangle(eoc.Flag("rect", "search for hits only within this rectangle of the field image.").PlaceHolder("X_MIN,Y_MIN,X_MAX,Y_MAX"))
 )
 
@@ -37,169 +39,6 @@ const (
 	IMG_FIELD = iota
 	IMG_OBJECT
 )
-
-type Hit struct {
-	X, Y int
-	P    float64
-}
-
-// Command line point parser
-type PointValue image.Point
-
-func (p *PointValue) Set(value string) error {
-	_, err := fmt.Sscanf(value, "%d,%d", &p.X, &p.Y)
-	return err
-}
-
-func (p *PointValue) String() string {
-	return fmt.Sprintf("%d,%d", p.X, p.Y)
-}
-
-func Point(s kingpin.Settings) (target *image.Point) {
-	target = &image.Point{}
-	s.SetValue((*PointValue)(target))
-	return
-}
-
-// Command line rectangle parser
-type RectangleValue image.Rectangle
-
-func (r *RectangleValue) Set(value string) error {
-	_, err := fmt.Sscanf(value, "%d,%d,%d,%d", &r.Min.X, &r.Min.Y, &r.Max.X, &r.Max.Y)
-	return err
-}
-
-func (r *RectangleValue) String() string {
-	return fmt.Sprintf("%d,%d,%d,%d", r.Min.X, r.Min.Y, r.Max.X, r.Max.Y)
-}
-
-func Rectangle(s kingpin.Settings) (target *image.Rectangle) {
-	target = &image.Rectangle{}
-	s.SetValue((*RectangleValue)(target))
-	return
-}
-
-// Distance (L-inf norm) between Hits p and q
-func (p Hit) Dist(q Hit) int {
-	dx := p.X - q.X
-	dy := p.Y - q.Y
-	if dx < 0 {
-		dx = -dx
-	}
-	if dy < 0 {
-		dy = -dy
-	}
-	if dx > dy {
-		return dx
-	}
-	return dy
-}
-
-// output only if verbose mode is enabled
-func verboseOut(format string, a ...interface{}) {
-	if *verbose {
-		fmt.Fprintf(os.Stderr, format, a...)
-	}
-}
-
-func toGrayscale(i image.Image) *image.Gray {
-	r := i.Bounds()
-	gray := image.NewGray(r)
-	for x := r.Min.X; x < r.Max.X; x++ {
-		for y := r.Min.Y; y < r.Max.Y; y++ {
-			//_, g, _, a := i.At(x, y).RGBA()
-			//c := color.RGBA{0, uint8(g >> 8), 0, uint8(a >> 8)}
-			//gray.Set(x, y, color.GrayModel.Convert(c))
-			gray.Set(x, y, color.GrayModel.Convert(i.At(x, y)))
-		}
-	}
-	return gray
-}
-
-// add hit p to hits list
-/*
-func addHit(p Hit) {
-	if hitDist != nil {
-		// is this hit p too close to some other hit?
-		for i := range hits {
-			if hits[i].Dist(p) < *hitDist {
-				// if p has a lower score, replace hits[i] with p. otherwise
-				// discard hit p
-				if p.P < hits[i].P {
-					hits[i] = p
-				}
-				return
-			}
-		}
-	}
-	hits = append(hits, p)
-}
-*/
-
-// return the slice index  corresponding to (x,y) in the search rectangle
-func offset(searchRect image.Rectangle, x, y int) int {
-	return (x - searchRect.Min.X) + searchRect.Dx()*(y-searchRect.Min.Y)
-}
-
-// return the (x,y) coordinates corresponding to slice index i
-func coords(searchRect image.Rectangle, i int) (x, y int) {
-	x = searchRect.Min.X + (i % searchRect.Dx())
-	y = searchRect.Min.Y + (i / searchRect.Dx())
-	return
-}
-
-func objSearch(field, object *image.Gray, searchRect image.Rectangle) (out []float64, min, max float64) {
-	// convert the pixel at (x,y) in img to a float64
-	float := func(img *image.Gray, x, y int) float64 {
-		return float64(img.GrayAt(x, y).Y) / 255.0
-	}
-	wg := sync.WaitGroup{}
-	out = make([]float64, searchRect.Dx()*searchRect.Dy())
-	// compute the L1-norm distance between 'object' and and 'object'-sized
-	// rectangle of 'field' with top-left corner at (u,v) in 'field'
-	//
-	// store result in out[offset(u,v)]
-	objSearch1 := func(u, v int) {
-		result := 0.0
-		i := offset(searchRect, u, v)
-		out[i] = 0
-		// Compute L1-norm
-		for x := object.Rect.Min.X; x < object.Rect.Max.X; x++ {
-			for y := object.Rect.Min.Y; y < object.Rect.Max.Y; y++ {
-				result += math.Abs(float(field, u+x, v+y) - float(object, x, y))
-			}
-		}
-		out[i] = result
-		wg.Done()
-	}
-	verboseOut("\n")
-	// choose column of searchRect
-	for u := searchRect.Min.X; u < searchRect.Max.X; u++ {
-		// launch one goroutine per row of searchRect
-		wg.Add(searchRect.Size().Y)
-		for v := searchRect.Min.Y; v < searchRect.Max.Y; v++ {
-			go objSearch1(u, v)
-		}
-		// wait for this column to finish
-		wg.Wait()
-		verboseOut("\r%.2f%% complete", float64(u-searchRect.Min.X)/float64(searchRect.Size().X)*100)
-		// start next column
-	}
-	verboseOut("\n")
-	// compute min and max of out
-	min = out[0]
-	max = out[0]
-	for i := range out {
-		if out[i] < min {
-			min = out[i]
-		}
-		if out[i] > max {
-			max = out[i]
-		}
-	}
-	// done
-	return
-}
 
 // verify command line options are valid
 func verifyCmdLine() bool {
@@ -218,60 +57,15 @@ func verifyCmdLine() bool {
 	return true
 }
 
-// convert the float64 slice to a grayscale image
-// value 'black' maps to black, value 'white' maps to white
-func toImage(f []float64, black, white float64) *image.Gray {
-	panic("not impl")
-}
-
-// Find L1 distances in d that are below t, and return them as a slice of Hits
-// Only hits at least minDist apart are found
-//
-// d is a slice of distances from objSearch
-// max is mapped to the Hit score of 1, and min is mapped to a Hit score of 0
-// t is the L1 distance threshhold to produce a hit.
-func findHits(d []float64, min, max, t float64, minDist int, searchRect image.Rectangle) (hits []Hit) {
-	if max <= min {
-		panic("max <= min")
+// output only if verbose output desired
+func verboseOut(format string, a ...interface{}) {
+	if *verbose {
+		fmt.Fprintf(os.Stderr, format, a...)
 	}
-	hitChan := make(chan Hit)
-	hits = make([]Hit, 0)
-	dRange := max - min
-	go func() {
-		for i := range d {
-			// normalize L1 distances into interval [0,1]
-			p := (d[i] - min) / dRange
-			if p < t {
-				x, y := coords(searchRect, i)
-				hitChan <- Hit{x, y, p}
-			}
-		}
-		close(hitChan)
-	}()
-nextHit:
-	for h := range hitChan {
-		for j := range hits {
-			if hits[j].Dist(h) < minDist {
-				// h is too close to hits[j]
-				// replace hits[j] if h's score is better, otherwise drop h
-				if h.P < hits[j].P {
-					hits[j] = h
-				}
-				continue nextHit
-			}
-		}
-		// h is a new hit
-		hits = append(hits, h)
-	}
-	// sort hits
-	sort.Slice(hits, func(i, j int) bool {
-		return hits[i].P < hits[j].P
-	})
-	return
 }
 
 func main() {
-	var img [2]*image.Gray
+	var img [2]*image.RGBA
 	var wg sync.WaitGroup
 	kingpin.Version("test")
 	kingpin.MustParse(eoc.Parse(os.Args[1:]))
@@ -320,7 +114,11 @@ func main() {
 				os.Exit(1)
 				return
 			}
-			img[w] = toGrayscale(tmpImg) // TODO allow preprocessing other than grayscale
+			var ok bool
+			if img[w], ok = tmpImg.(*image.RGBA); !ok {
+				verboseOut("warning: converting image %s format %T to RGBA\n", *imageFilename[w], tmpImg)
+				img[w] = imutil.ToRGBA(tmpImg)
+			}
 			verboseOut("loaded %s\n", *imageFilename[w])
 			f.Close()
 		}(i)
@@ -352,22 +150,27 @@ func main() {
 	}
 	verboseOut("minimum hit distance %d\n", *hitDist)
 	// perform object search
-	out, _, max := objSearch(img[IMG_FIELD], img[IMG_OBJECT], *searchRect)
-	// find hits
-	hits := findHits(out, 0, max, *tolerance, *hitDist, *searchRect)
-	if len(hits) == 0 {
-		fmt.Fprintf(os.Stderr, "Warning: no hits found\n")
-		os.Exit(2)
-		return
+	var verboseWriter io.Writer
+	if *verbose {
+		verboseWriter = os.Stderr
 	}
+	hits := objsearch.Search(
+		img[IMG_FIELD],
+		img[IMG_OBJECT],
+		*searchRect,
+		*tolerance,
+		*hitDist,
+		verboseWriter,
+		objsearch.COLORMODE_GRAY,
+		objsearch.COMBINEMODE_MAX,
+	)
 	// offset hits
 	for i := range hits {
-		hits[i].X += hitOffset.X
-		hits[i].Y += hitOffset.Y
+		hits[i].P = hits[i].P.Add(*hitOffset)
 	}
 	// output hits
 	for i := range hits {
-		s := fmt.Sprintf("%d,%d,%f", hits[i].X, hits[i].Y, hits[i].P)
+		s := fmt.Sprintf("%d,%d,%f", hits[i].P.X, hits[i].P.Y, hits[i].S)
 		if *noCsvOutput == false {
 			csv.WriteString(fmt.Sprintln(s))
 		}
@@ -382,7 +185,7 @@ func main() {
 		defer pngOut.Close()
 		// draw hits on field
 		for _, h := range hits {
-			draw.Draw(img[IMG_FIELD], image.Rect(h.X-5, h.Y-5, h.X+5, h.Y+5), &image.Uniform{color.Gray{0}}, image.ZP, draw.Src)
+			draw.Draw(img[IMG_FIELD], image.Rect(h.P.X-5, h.P.Y-5, h.P.X+5, h.P.Y+5), &image.Uniform{color.Gray{0}}, image.ZP, draw.Src)
 		}
 		png.Encode(pngOut, img[IMG_FIELD])
 	}
