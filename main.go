@@ -32,6 +32,7 @@ var (
 	timeoutMillis = eoc.Flag("timeout", "timeout in milliseconds. 0 to disable timeout.").Short('t').Default("0").Uint()
 	hitOffset     = Point(eoc.Flag("offset", "apply offset to all hits. default: hits are centered on object.").PlaceHolder("X,Y").Default("0,0"))
 	searchRect    = Rectangle(eoc.Flag("rect", "search for hits only within this rectangle of the field image.").PlaceHolder("X_MIN,Y_MIN,X_MAX,Y_MAX"))
+	rgb           = eoc.Flag("rgb", "compare RGB channels separately and choose worst of the three scores").Bool()
 )
 
 // imageFilename slice indices
@@ -151,8 +152,14 @@ func main() {
 	verboseOut("minimum hit distance %d\n", *hitDist)
 	// perform object search
 	var verboseWriter io.Writer
+	var colorMode objsearch.ColorMode
 	if *verbose {
 		verboseWriter = os.Stderr
+	}
+	if *rgb {
+		colorMode = objsearch.COLORMODE_RGB
+	} else {
+		colorMode = objsearch.COLORMODE_GRAY
 	}
 	hits := objsearch.Search(
 		img[IMG_FIELD],
@@ -161,7 +168,7 @@ func main() {
 		*tolerance,
 		*hitDist,
 		verboseWriter,
-		objsearch.COLORMODE_GRAY,
+		colorMode,
 		objsearch.COMBINEMODE_MAX,
 	)
 	// offset hits
